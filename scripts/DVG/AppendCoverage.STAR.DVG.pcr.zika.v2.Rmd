@@ -1,0 +1,169 @@
+---
+title: "AppendCoverage.DVG.ZIKA"
+author: "Kate Johnson"
+date: "July 7 2019- Oct. 10th, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r Strain,echo=F}
+STRAIN = 'ZIKA'
+segment_list =c('MR766')
+```
+
+```{r LoadLibrary,echo=FALSE}
+library('tidyverse')
+library('reshape2')
+library('grid')
+require('gridExtra')
+require('plyr')
+```
+
+# Load all of the data files which includes    
+# The Metadata with filename information
+# The 'filename' file which is the candidate DVGs and their coordinates
+# The coverage file - which contains the nucleotide site specific coverage
+# The idxstat file generated with samtools that gives the total reads mapped
+```{r LoadFiles,echo=FALSE}
+meta = '../../MetadataZika/Zika_Metadata_v4.csv'
+metadf= read.csv(file=meta,header=T,sep=",",na.strings = c(''))
+filename<-paste0('../../DVG_PCR/CandidateDI_OneGap_CDS.csv')
+coverage_file = paste0('../../coverage/',STRAIN,'.coverage.pcr.csv')
+idxstats_file =paste0('../../DVG_PCR/IdxStats.csv')
+mydata1=read.csv(file=filename,header=T,sep=",",na.strings = c(''))
+mydata1 = mydata1[!duplicated(mydata1),] %>% droplevels()
+```
+
+
+# Add the nucleotide specific coverage information using the coverage files
+```{r mergedata, echo=FALSE}
+merge_data = function(dataframe1,filename,seg){
+  #grab coverage for the before start and after gap positions and calculate average relative freq
+  seg_cov = read.csv(file=filename,header=T,sep=",",na.strings = c('')) %>%
+    filter(segment == seg) %>% droplevels() #filter for the segment
+  seg_df = filter(dataframe1,segment==seg) %>% droplevels() #filter the DI by segment
+  print("input dataframe dimensions")
+  print(dim(seg_df))
+  
+  #merge coverage and di dataframes by start of gap  
+  seg_merged = merge(seg_df,seg_cov[,c('name','segment','ntpos','totalcount')],
+                     by.x = c('name','segment','gap_start'),
+                     by.y =c('name','segment','ntpos'), 
+                     all.x = TRUE,all.y=F ) #merge the two dataframes
+
+  #merge coverage and di dataframes by end of gap
+  seg_merged =merge(seg_merged,
+                     seg_cov[,c('name','segment','ntpos','totalcount')], 
+                     by.x=c('name','segment','gap_end'),
+                     by.y=c('name','segment','ntpos'),
+                     all.x=T,all.y=F)
+  seg_merged$positions_avg = rowMeans(subset(seg_merged,
+                                             select=c('totalcount.x','totalcount.y')),
+                                      na.rm=T)
+  return(seg_merged)
+}
+```
+
+# Add the idxstats information containing the total reads that aligned to the reference
+```{r idxstats,echo=FALSE}
+add_idxstats = function(di_dataframe,idxstats_df,seg){
+  #filter data to match the alignment information
+  idx_seg = read.csv(file=idxstats_df,header=T,sep=",",na.strings = c('')) %>%
+    filter(segment==seg) %>% droplevels()
+  di_seg = filter(di_dataframe, segment ==seg) %>% droplevels()
+
+  #count number of reads for each for each sample and segment
+  CountTotalGaps = count(di_seg$name)
+  CountTotalGaps$segment = seg
+
+  colnames(CountTotalGaps) = c('name','SingleReadCount','segment')
+  CountTotalGaps$gap_total = CountTotalGaps$SingleReadCount 
+  
+  #merge di and total count
+  seg_merge1 =merge(di_seg,CountTotalGaps[,c('name','segment','gap_total')], 
+                    by=c('name','segment')) 
+  
+  #merge di and idxstats 
+  seg_merge1 =merge(seg_merge1,idx_seg[,c('name','segment','totalreads')], 
+                    by=c('name','segment')) 
+  
+  return(seg_merge1)
+}
+
+```
+
+# Add coverage data for each segment
+# Prints out the dimensions of the output dataframe
+```{r AddCoverage,echo=FALSE}
+df_all = data.frame()
+for (SEG in segment_list){
+  print(SEG)
+  segment=SEG
+  coverage = merge_data(mydata1,coverage_file,segment)
+  df_all = rbind(df_all,coverage)
+}
+df_all = df_all[!duplicated(df_all),] %>% droplevels()
+print("output dataframe dimensions")
+print(dim(df_all))
+```
+
+# add total read information using idxstats files
+```{r AddIdxStats, echo=FALSE}
+df_all2 = data.frame()
+for (SEG in segment_list){
+  print(SEG)
+  segment = SEG
+  idx_df= add_idxstats(df_all,idxstats_file,segment)
+  df_all2 = rbind(df_all2,idx_df)
+}
+df_all2 = df_all2[!duplicated(df_all2),] %>% droplevels()
+DF_all = df_all2 #just to keep it safe especially if large dataframe
+print(dim(DF_all))
+```
+# New columns include: 
+# totalcount.x (start of deletion read coverage)
+# totalcount.y (end of deletion read coverage)
+# positions_average (average coverage at the start and end of the deletion)- doesn't work well with different pcrs
+# gap_total which is the total gap count for ocr each sample
+# totalreads which is the total number of reads mapped to the reference in each pcr
+
+# Add the individual gap counts
+```{r CountGaps, echo=FALSE}
+print('counting gaps')
+mydata_slim = select(mydata1,'name','readname','gap','segment') #reduce information
+mydata_slim = mydata_slim[!duplicated(mydata_slim),] %>% droplevels()
+freq_of_gap = count(mydata_slim,c('name','gap','segment')) #count number of gaps for each sample
+```
+
+```{r MergeDF,echo=FALSE}
+print('merge dataframes')
+d1 = merge(DF_all,freq_of_gap[,c('name','gap','segment','freq')], 
+                  by =c('name','gap','segment'))
+d1 = d1[order(-d1$freq),]
+d1 = d1[!duplicated(d1),] %>% droplevels()
+print(dim(d1))
+```
+
+# separate the name to distinguish the pcr (1-3)
+```{r WriteFile, echo=FALSE}
+d1 = d1 %>% separate(name,into=c('name','pcr'),sep = "_pcr")
+d2_extra = merge(d1,metadf, by ='name', all.x =T)
+d2_extra= d2_extra[!duplicated(d2_extra),] %>% droplevels()
+write.csv(d2_extra, paste0('../../DVG_PCR/',STRAIN, '.CandidateDI_CDS_3.csv'),row.names=F)
+```
+
+# remove the readnames to reduce down the information
+```{r RemoveReads, echo=FALSE}
+d3_noreads = within(d1, rm('readname'))
+d3_noreads = d3_noreads[!duplicated(d3_noreads),] %>% droplevels()
+d3_noreads = merge(d3_noreads, metadf,by.x ='name',by.y='name',all.x =T)
+d3_noreads = d3_noreads[!duplicated(d3_noreads),] %>% droplevels()
+print(dim(d3_noreads))
+write.csv(d3_noreads, paste0('../../DVG_PCR/',STRAIN, '.FilteredDI.csv'),row.names=F)
+```
+
+
+

@@ -1,0 +1,248 @@
+---
+title: "SNVAnalysisZika"
+author: "Kate Johnson"
+date: "May 21, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r load, echo=F}
+library('tidyr')
+library('ggplot2')
+library('tidyverse')
+library('reshape2')
+library('grid')
+require('gridExtra')
+require('plyr')
+library('plotly')
+library('reshape2')
+```
+
+```{r GeneDF, echo=F}
+Gene_ID = c('C','pr','M','E','NS1','NS2A','NS2B','NS3','NS4A','2K','NS4B','NS5')
+Gene_start = c(107,473,752,977,2477,3533,4211,4601,6452,6833,6902,7655)
+Gene_End = c(472,751,976,2476,3532,4210,4600,6451,6832,6901,7654,10363) #ns3 ns4a off by 100 missing
+Gene_df = cbind(Gene_ID,Gene_start,Gene_End)
+Gene_df = as.data.frame(Gene_df)
+Gene_df$Gene_start = (as.numeric(as.character(Gene_df$Gene_start)))-106
+Gene_df$Gene_End = as.numeric(as.character(Gene_df$Gene_End))-106
+
+Genes = data.frame(gene = as.character(), position = as.numeric())
+for (id in Gene_ID){
+  gene_Range = filter(Gene_df, Gene_ID == id)
+  gene_Range=droplevels(gene_Range)
+  gene_ids = c(rep(id, (gene_Range$Gene_End + 1 - gene_Range$Gene_start)))
+  ntpos = c(seq(gene_Range$Gene_start, gene_Range$Gene_End, by =1))
+  genes_df = cbind(gene_ids,ntpos)
+  genes_df = as.data.frame(genes_df)
+  Genes = rbind(Genes, genes_df)
+}
+```
+
+```{r ReadData, echo=F}
+STRAIN = 'ZIKA'
+SEGMENTLIST <- c('MR766')
+GenomeLength = 10260
+frq = 0.03
+coverage = 200
+metadata = '../../MetadataZika/Zika_Metadata_v4.csv' #where metadata is located
+meta_df = read.csv(file=metadata,header=T,sep=",",na.strings = c('nan'))
+variantdirect = '../../Variants/Linegraphs/'
+```
+
+```{r Rearrange, echo=F}
+filename=paste0(variantdirect,'MR766.all.listVariants.ZIKA.ZIKA.',coverage,'.',frq,'.csv')
+mydata=read.csv(file=filename,header=T,sep=",",na.strings = c('nan'))
+mydata_meta = merge(mydata, meta_df,by.x='sample',by.y='name')
+
+main_df = merge(mydata_meta,Genes,by='ntpos')
+
+min_df = filter(main_df, majmin=='minor') %>%
+  select(ntpos,sample,segment,nt,majmin,freq,aa,codon,nonsyn,binocheck,totalcount,
+         mouse_id,transmission,tissue,sex,type,id2,id,gene_ids)%>% droplevels()
+
+colnames(min_df)= c('ntpos','sample','segment','minornt','majmin','minorfreq',
+                    'minoraa','minorcodon','nonsyn','binocheck','totalcount',
+                    'mouse_id','transmission','tissue','sex','type','id2','id','gene_ids')
+maj_df = filter(main_df, majmin =='major')  %>%
+  select(sample,ntpos,nt,aa,codon,freq,aapos) %>% droplevels()
+
+colnames(maj_df) = c('sample','ntpos','majornt','majoraa',
+                     'majorcodon','majorfreq','aapos')
+
+df_merge = merge(min_df, maj_df, by=c('sample','ntpos')) %>%
+  select(sample,ntpos,majornt,majorfreq,minornt,minorfreq,
+         aapos,majorcodon,minorcodon,majoraa,minoraa,nonsyn,gene_ids,
+         mouse_id,transmission,tissue,sex,type,id2,id,binocheck,segment)%>%
+  droplevels()
+
+
+write.csv(df_merge, 
+          file = paste0(variantdirect,'ZikaVariants.',coverage,'.',frq,'.csv'),
+                        row.names=F)
+
+```
+
+```{r Linegraphs}
+cov = 500
+f = 0.005
+
+myColors<-c('#d7191c','#abd9e9','#fdae61','#2c7bb6','#ffffbf')#,'#FF9000')
+names(myColors) <- c('A','C','G','T','-')#,'N')
+colScale <- scale_fill_manual(name = "grp",values = myColors)
+colscale2 <- scale_colour_manual(name = "grp",values = myColors)
+
+
+pos=c(8923,8927,8931,9726,9731,5820,10230,10231,10232,10233,10234,7486,8062,
+        4682,1584,3825,1210, 3532,9027)
+MouseOrder = c('plasmid','stock1','stock2','M1','M3','M2','M4',
+               'M5','M6','M7','M8','M9','M10',
+               'MQ1','MQ4','MQ6','MQ9','MQ14','MQ16','MQ18','MQ19',
+               'MQ23','MQ25','MQ1_2','MQ4_2')
+
+
+tissue_ord = c('plasmid','stock1','stock2','mosquito','brain','spinal_cord',
+        'kidney','liver','spleen','bone_marrow','blood','reproductive')
+
+grapher_nonsyn <- function(STRAIN,SEGMENT){
+    filename <- paste0(variantdirect,SEGMENT,'.nobino.all.linegraph.',STRAIN,'.',
+                       STRAIN,'.',cov,'.',f,'.csv')
+    print(filename)
+    mydata<-read.csv(file=filename,header=T,sep=",",na.strings = c('nan'))
+    mydata_meta = merge(mydata, meta_df,by.x='sample',by.y='name') %>%
+      filter(ntpos %in% pos & freq >=f) 
+    mydata_meta$cluster=cut(mydata_meta$freq,c(0,.01,.03,.05,1))
+    mydata = mydata_meta
+    mydata=filter(mydata,tissue%in%tissue_ord) %>%
+      droplevels()
+    mydata$mouse_id = factor(mydata$mouse_id,levels=MouseOrder)
+    mydata$tissue = factor(mydata$tissue,levels=tissue_ord)
+    
+    #p<- ggplot(mydata,aes(x=factor(id2),y=freq, group=nt)) +
+      p<- ggplot(mydata,aes(x=mouse_id,y=freq, group=nt)) + 
+      geom_line(aes(group=nt,colour=nt,alpha=0.5)) +
+      geom_point(aes(shape=cluster),color='black', size=5) +
+      geom_point(aes(fill=nt, color=nt, shape=cluster), size=4.5) +
+      geom_point(data=subset(mydata,nonsyn=='nonsyn'),size=1) +
+      geom_hline(yintercept = 0.03, linetype = 2) +
+      facet_grid(ntpos~ transmission+tissue, scales='free',space='free') +
+      theme_bw() +
+      theme(text = element_text(size = 30),axis.text.x = element_text(angle = 90, vjust = 0.5, 
+                                                                      hjust=1)) + 
+      colScale +
+      colscale2 +
+      scale_shape_manual(values=c(18,17,15,19))
+    
+    ggsave(p, file=paste(variantdirect,STRAIN,'.',SEGMENT,'.',cov,".",f,".pdf",sep=''),
+           width=50,height=40,limitsize=FALSE,useDingbats=FALSE)
+    
+}
+for (SEGMENT in SEGMENTLIST){
+    grapher_nonsyn(STRAIN,SEGMENT)
+}
+```
+
+
+```{r Fig2}
+variants =paste0(variantdirect,'ZikaVariants.',coverage,'.',frq,'.csv')
+
+SNVS = read.csv(file=variants,header=T,sep=",",na.strings = c('')) %>% 
+  filter(binocheck=='True') %>% droplevels()
+
+tiss_list = c('brain','spinal_cord','kidney','liver','bone_marrow','reproductive')
+SNV_df = filter(SNVS,tissue %in% tiss_list) %>% droplevels()
+fig2 = ggplot() +
+  geom_rect(data=Gene_df,aes(xmin=Gene_start,xmax=Gene_End,fill=Gene_ID,
+                             ymin=0,ymax=1),alpha=0.2,color='black') +
+  geom_hline(yintercept=0.03,linetype=2) +
+  geom_hline(yintercept=0.05, linetype=2) +
+  geom_hline(yintercept=0.1, linetype=2) +
+  geom_point(data=SNV_df,aes(x= ntpos,y=minorfreq,shape=transmission)) +
+  theme_bw() +
+  facet_grid(tissue~.)
+ggsave(fig2, file=paste0(variantdirect,"Zika.Fig2.pdf"), width=8,
+       height=16,limitsize=FALSE,useDingbats=F)
+
+print(fig2)
+```
+
+```{r Fig4}
+mice = c('M1','M2','M3','M4','M5','M6','M7','M8','M9','M10')
+snv.mouse = filter(SNVS, mouse_id %in% mice)
+fig4 = ggplot()+ 
+  geom_rect(data=Gene_df,aes(xmin=Gene_start,xmax=Gene_End, 
+                             ymin=0,ymax=1),alpha=0.05,color='black') +
+  geom_hline(yintercept=0.03,linetype=2) +
+  geom_hline(yintercept=0.05, linetype=2) +
+  geom_hline(yintercept=0.1, linetype=2) +
+  geom_point(data=snv.mouse,aes(x= ntpos,y=minorfreq,color=mouse_id),alpha=0.8) +
+  theme_bw() +
+  facet_grid(transmission~nonsyn) +
+  scale_color_brewer(palette = 'Set3')
+print(fig4)
+ggsave(fig4, file=paste0(variantdirect,"Zika.Fig4.200.03.pdf"), width=12,
+       height=7,limitsize=FALSE,useDingbats=F)
+
+```
+
+
+```{r BarNonsyn, echo=FALSE}
+#aes(fill=type,y=(..count..)/tapply(..count..,..PANEL..,sum)[..PANEL..]),binwidth=30
+Nonsyn = ggplot(SNVS,aes(x=nonsyn,group=nonsyn,fill=nonsyn))+
+  geom_bar(aes(fill=type,y=100*(..count..)/tapply(..count..,..PANEL..,sum)[..PANEL..]),
+           color='black') +
+  theme_bw() +
+  scale_fill_brewer(palette='Set1')
+print(Nonsyn)
+
+Nonsyn.tissue = ggplot(SNVS,aes(x=nonsyn,group=nonsyn,fill=nonsyn))+
+  geom_bar(color='black') +
+  theme_bw() +
+  facet_grid(.~tissue) +
+  scale_fill_brewer(palette='Set1')
+print(Nonsyn.tissue)
+
+Nonsyn.mouse = ggplot(SNVS,aes(x=nonsyn,group=nonsyn,fill=nonsyn))+
+  geom_bar(color='black') +
+  theme_bw() +
+  facet_grid(.~mouse_id) +
+  scale_fill_brewer(palette='Set1')
+print(Nonsyn.mouse)
+
+Nonsyn.transmission = ggplot(SNVS,aes(x=nonsyn,group=nonsyn,fill=nonsyn))+
+  geom_bar(color='black') +
+  theme_bw() +
+  facet_grid(.~transmission) +
+  scale_fill_brewer(palette='Set1')
+print(Nonsyn.transmission)
+
+
+mouse.count = count(SNVS,c('mouse_id','nonsyn'))
+mouse.tissue = count(SNVS,c('id','nonsyn'))
+mouse.tissue.total = count(SNVS,'id')
+mouse.count.total = count(SNVS,'mouse_id')
+mouse.tissue.total
+Fig4 = ggplot()
+```
+
+
+
+
+```{r ManhattanVariants}
+SNVS$gene_ids = factor(SNVS$gene_ids,levels=Gene_ID)
+Gene_df$Gene_ID = factor(Gene_df$Gene_ID,levels=Gene_ID)
+print(Gene_df)
+ManPlot = ggplot() +
+  geom_rect(data=Gene_df,aes(xmin=Gene_start,xmax=Gene_End,fill=Gene_ID,
+                             ymin=0,ymax=1),alpha=0.2,color='black') +
+  geom_hline(yintercept=0.03,linetype=2) +
+  geom_hline(yintercept=0.05, linetype=2) +
+  geom_hline(yintercept=0.1, linetype=2) +
+  geom_point(data=SNVS,aes(x= ntpos,y=minorfreq)) +
+  theme_bw()
+print(ManPlot)
+```
+

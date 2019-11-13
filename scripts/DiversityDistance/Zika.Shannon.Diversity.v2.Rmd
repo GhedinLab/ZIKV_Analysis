@@ -1,0 +1,378 @@
+---
+title: "Zika Shannon  Diversity"
+author: "Kate Johnson"
+date: "May 20, 2019 - October 8, 2019 "
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r LoadLib, include=FALSE,message=F}
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+library(FSA)
+library(rcompanion)
+```
+
+```{r LoadData,echo=FALSE,message=F}
+#load and rearrange data if needed
+cov = 200
+freq =0.03
+filename=paste0('../../Diversity/PCR1/ShannonDiversity_STAR.zika.perkb.',cov,'.',freq,'.pcr1.csv') 
+mydata<-read.csv(file=filename,header=T,sep=",",na.strings = c('')) 
+mydata = filter(mydata, segment=='FULL') %>% droplevels()
+metadata = '../../MetadataZika/Zika_Metadata_v4.csv' #where metadata is located
+meta_df = read.csv(file=metadata,header=T,sep=",",na.strings = c('nan')) %>%
+  select(name,full,experiment)
+mydata_meta = merge(mydata, meta_df,by.x='sample',by.y='name')
+mydata=mydata_meta
+
+tissue_list=c('brain','liver','kidney','spinal_cord','bone_marrow')
+
+tissue_list2 = c('brain','liver','kidney','spinal_cord','bone_marrow',
+                 'stock2','mosquito','spleen',
+                 'stock1','blood','reproductive')
+
+No_Stock = filter(mydata, sample!='stock' & 
+                    tissue %in% tissue_list & segment=='FULL')%>%
+  droplevels()
+
+MouseOrder = c('M1','M3','M2','M4','M5','M6','M7','M8','M9','M10')
+No_Stock$mouse = factor(No_Stock$mouse,levels=rev(MouseOrder))
+```
+
+```{r GeneDF,echo=FALSE,message=F}
+Gene_ID = c('C','pr','M','E','NS1','NS2A','NS2B','NS3','NS4A','2K','NS4B','NS5')
+Gene_start = c(107,473,752,977,2477,3533,4211,4601,6452,6833,6902,7655)
+Gene_End = c(472,751,976,2476,3532,4210,4600,6451,6832,6901,7654,10363) #ns3 ns4a off by 100 missing
+Gene_df = cbind(Gene_ID,Gene_start,Gene_End)
+Gene_df = as.data.frame(Gene_df)
+Gene_df$Gene_start = (as.numeric(as.character(Gene_df$Gene_start)))-106
+Gene_df$Gene_End = as.numeric(as.character(Gene_df$Gene_End))-106
+```
+
+```{r tissueColors, echo=FALSE,message=F}
+myColors<-c('black','#a9a9a9','#004d99','#d80000','#ee7600')
+names(myColors) =c('brain','liver','kidney','spinal_cord','bone_marrow')
+colScale <- scale_color_manual(name = "grp",values = myColors)
+
+reducedColors =c('#66c2a4','#fc8d62','#8d9fcb','#e78ac3',
+                 '#a6d854','#ffd92f','#e5c494','#b2b3b2',
+                 '#feffb3','#0a068b','#fe3636')
+
+names(reducedColors) = c('brain','liver','kidney','spinal_cord','bone_marrow',
+                 'stock2','mosquito','spleen','stock1','blood','reproductive')
+
+RedColScale=scale_color_manual(name='grp',values=reducedColors)
+
+RedColFill = scale_fill_manual(name='grp',values=reducedColors)
+```
+# PCR1 ONLY
+
+### Shannon Entropy broken up by tissue type, trianges represent samples from the second experiment.     
+```{r, echo=F,message=F}
+g=ggplot(data = filter(mydata,tissue %in% tissue_list2), aes(x = tissue, y = shannon_sum,
+                                                             group=tissue))+
+  geom_boxplot(width=0.5) +
+  geom_jitter(aes(color=tissue,shape=experiment),
+              size=0.95,alpha=1,width=0.2)+
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1,size=5)) +
+  RedColScale
+ggsave(g, file=("../../Diversity/PCR1/Zika.Tissue.Reduced.pdf"), width=5, height=3,limitsize=FALSE)
+print(g) 
+```
+
+### PCR1 diversity measurements broken up by transmission groups.     
+```{r, echo=F,message=F}
+b<- ggplot(mydata, aes(x = transmission, y = shannon_sum,group=transmission))+
+    geom_boxplot(width=0.5) +
+    geom_jitter(aes(shape=experiment),width = 0.15,alpha=0.9)+
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+    theme_bw()
+ggsave(b, file=("../../Diversity/PCR1/Zika.Transmission.PCR1.pdf"), width=6, height=4,limitsize=FALSE)
+print(b) 
+```
+
+### Kruskal Wallis test to determine significance between transmission groups.    
+
+Alternative hypothesis accepted- samples come from different populations. P.value is significant.    
+
+P-value:  
+```{r StatsTransmissionPCR1,echo=F,message=F,message=F}
+transstat = filter(mydata,tissue %in% tissue_list2) %>%
+  select(mouse,tissue,transmission,shannon_sum)
+
+
+#summarize
+s = Summarize(shannon_sum~transmission,data=transstat,digits=3)
+write.csv(s,"../../Diversity/PCR1/SummaryStats.Diversity.ByTransmission.pcr1.csv",
+          row.names=F)
+
+#kruskal wallis test
+pval=kruskal.test(shannon_sum~transmission,data=transstat)
+print(pval$p.value)
+#pval 0.009404
+#Null: all samples/groups are from identical populations
+#Alt: At least one of the samples comes from different population
+#there exists a significant difference among the groups p.value = 0.009404
+
+#Dunns test
+#If the Kruskal–Wallis test is significant, a post-hoc analysis can be performed to #determine which groups differ from each other group. 
+DT = dunnTest(shannon_sum~transmission,data=transstat,method = 'bh')
+d = as.data.frame(DT$res)
+write.csv(d,"../../Diversity/PCR1/DunnTest.Stats.Diversity.ByTransmission.PCR1.csv",row.names = F)
+```
+
+### Shannon entropy by mouse, and tissue for PCR1.    
+```{r, echo=F,message=F,warning=F}
+MLineAll = ggplot(data=filter(mydata,tissue%in%tissue_list2),
+                  aes(x=mouse,y=shannon_sum,group=mouse,color=tissue)) +
+  geom_line(color='black') +
+  geom_point(aes(color=tissue,shape=experiment),alpha=0.9,size=2) +
+  theme_bw()+
+  coord_flip()+
+  RedColScale
+print(MLineAll)
+ggsave(MLineAll, file=("../../Diversity/PCR1/Mouse.Tissue.Line.All.pdf"), width=7, 
+       height=4,limitsize=FALSE,useDingbats=F)
+```
+
+
+```{r meanpcr1, echo=F,message=F}
+mean.it= aggregate(data=mydata, shannon_sum ~ tissue +transmission ,FUN=mean)
+sd.it = aggregate(data=mydata, shannon_sum ~ tissue +transmission ,FUN=sd)
+colnames(sd.it) = c('tissue','transmission','sd')
+mean.sd = merge(mean.it,sd.it,by=c('tissue','transmission'))
+mean.sd$maxy = mean.sd$shannon_sum + mean.sd$sd
+mean.sd$miny = mean.sd$shannon_sum - mean.sd$sd
+mean.sd$tissue_transmission = paste0(mean.sd$transmission,'-',mean.sd$tissue)
+mydata$tissue_transmission = paste0(mydata$transmission,'-',mydata$tissue)
+```
+
+### Bar graphs of the mean and standard deviation, using the shannon entropy of PCR1 samples.     
+
+```{r meanplotpcr1, echo=F,message=F,warning=F}
+mean.sd = filter(mean.sd, tissue %in% tissue_list2)
+
+tt_ord = c('stock1-stock1','stock2-stock2','blood_meal-mosquito',
+           'mosquito-brain','mosquito-spinal_cord','mosquito-kidney',
+           'mosquito-liver','mosquito-spleen','mosquito-bone_marrow','mosquito-blood',
+           'mosquito-reproductive','needle-brain','needle-spinal_cord',
+           'needle-kidney','needle-liver','needle-spleen','needle-bone_marrow',
+           'needle-blood','needle-reproductive')
+
+mean.sd$tissue_transmission = factor(mean.sd$tissue_transmission,levels=tt_ord)
+mydata = filter(mydata, tissue %in% tissue_list2)
+#h=ggplot(data=filter(mean.sd, tissue%in% tissue_list2),
+h=ggplot(data=mean.sd, aes(x=tissue_transmission, y=shannon_sum,
+                           group=tissue_transmission)) + 
+  geom_col(aes(fill=tissue))+
+  geom_errorbar(aes(ymin=miny, ymax=maxy), width=.2,
+                position=position_dodge(0)) +
+  geom_jitter(data =filter(mydata,tissue %in% tissue_list2),
+              aes(y=shannon_sum,x=tissue_transmission,group=tissue_transmission,
+                  shape=experiment),
+              width=0.2) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+  RedColFill
+ggsave(h, file= "../../Diversity/PCR1/Shannon.Mean.Tissue.pdf", 
+       width=8, height=5,limitsize=FALSE, useDingbats=FALSE)
+print(h)
+```
+
+### Kruskal Wallis statistics of shannon entropy by transmission and tissue using PCR1 samples.    
+     
+Alternative hypothesis accepted- samples by tissue type and transmission route are significantly different.    
+      
+p-value:     
+
+```{r ShannonStats, echo=F,message=F,warning=F}
+df = filter(mydata,tissue %in% tissue_list2) %>%
+  select(mouse,tissue,transmission,shannon_sum,tissue_transmission)
+
+
+#summarize
+s = Summarize(shannon_sum~tissue_transmission,data=df,digits=3)
+write.csv(s,"../../Diversity/PCR1/SummaryStats.Diversity.pcr1.csv",
+          row.names=F)
+
+#kruskal wallis test
+pval=kruskal.test(shannon_sum~tissue_transmission,data=df)
+print(pval$p.value)
+#pval 0.004
+#Null: all samples/groups are from identical populations
+#Alt: At least one of the samples comes from different population
+#there exists a significant difference among the groups p = 0.004207
+
+#Dunns test
+#If the Kruskal–Wallis test is significant, a post-hoc analysis can be performed to #determine which groups differ from each other group. 
+DT = dunnTest(shannon_sum~tissue_transmission,data=df,method = 'bh')
+d = as.data.frame(DT$res)
+write.csv(d,"../../Diversity/PCR1/DunnTest.Stats.Diversity.PCR1.csv",row.names = F)
+```
+
+# FULL LENGTH
+     
+### Shannon entropy by tissue type across the full-length of the genome.     
+```{r FullGenomeShannon,echo=F,warning=F}
+full<-paste0('../../Diversity/FullLength/ShannonDiversity_STAR.zika.ntpos.',
+             cov,'.',freq,'.full.csv') 
+
+ntpos_df = read.csv(file=full,header=T,sep=",",na.strings = c(''))
+ntpos_df = filter(ntpos_df, tissue %in% tissue_list2)%>%
+  droplevels()
+
+shannon_ntpos = ggplot(ntpos_df)+ 
+  geom_bar(aes(x=ntpos,y=shannon,group=tissue,fill=tissue),width=50,
+           stat='identity',alpha=1) +
+  theme_bw() +
+  RedColFill
+ggsave(shannon_ntpos, file=("../../Diversity/FullLength/ntpos.shannon.bar.thick.pdf"), 
+       width=10, height=3,limitsize=FALSE)
+
+print(shannon_ntpos)
+```
+
+
+```{r LoadFull,echo=F,message=F}
+filename=paste0('../../Diversity/FullLength/ShannonDiversity_STAR.zika.perkb.',cov,'.',freq,'.full.csv') 
+mydata<-read.csv(file=filename,header=T,sep=",",na.strings = c('')) 
+mydata = filter(mydata, segment=='FULL' & tissue %in% tissue_list2) %>% 
+  droplevels()
+mydata_meta = merge(mydata, meta_df,by.x='sample',by.y='name')
+mydata=mydata_meta %>% filter(full =='yes') %>% droplevels()
+
+```
+
+
+```{r meanfull, echo=F,message=F}
+mean.it= aggregate(data=mydata, shannon_sum ~ tissue +transmission ,FUN=mean)
+sd.it = aggregate(data=mydata, shannon_sum ~ tissue +transmission ,FUN=sd)
+colnames(sd.it) = c('tissue','transmission','sd')
+mean.sd = merge(mean.it,sd.it,by=c('tissue','transmission'))
+mean.sd$maxy = mean.sd$shannon_sum + mean.sd$sd
+mean.sd$miny = mean.sd$shannon_sum - mean.sd$sd
+mean.sd$tissue_transmission = paste0(mean.sd$transmission,'-',mean.sd$tissue)
+mydata$tissue_transmission = paste0(mydata$transmission,'-',mydata$tissue)
+```
+
+### Mean and standard deviation using the Shannon entropy from samples where the entire genome was sequenced.     
+```{r meanplotfull, echo=F,message=F,warning=F}
+mean.sd = filter(mean.sd, tissue %in% tissue_list2)%>%
+  droplevels()
+
+tt_ord = c('stock1-stock1','stock2-stock2','blood_meal-mosquito',
+           'mosquito-brain','mosquito-spinal_cord','mosquito-kidney',
+           'mosquito-liver','mosquito-spleen','mosquito-bone_marrow','mosquito-blood',
+           'mosquito-reproductive','needle-brain','needle-spinal_cord',
+           'needle-kidney','needle-liver','needle-spleen','needle-bone_marrow',
+           'needle-blood','needle-reproductive')
+
+mean.sd$tissue_transmission = factor(mean.sd$tissue_transmission,levels=tt_ord)
+
+
+h=ggplot(data=mean.sd, aes(x=tissue_transmission, y=shannon_sum,
+                           group=tissue_transmission)) + 
+  geom_col(aes(fill=tissue))+
+  geom_errorbar(aes(ymin=miny, ymax=maxy), width=.2,
+                position=position_dodge(0)) +
+  geom_jitter(data=mydata,
+              aes(y=shannon_sum,x=tissue_transmission,group=tissue_transmission,
+                  shape=experiment),
+              width=0.2) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))+
+  RedColFill
+ggsave(h, file= "../../Diversity/FullLength/Shannon.Mean.Tissue.FULL.pdf", 
+       width=8, height=5,limitsize=FALSE, useDingbats=FALSE)
+print(h)
+```
+
+### Kruskal-Wallis test on the tissue type and transmission route from samples that have the full-length genome.     
+    
+p-value:     
+```{r FullShannonStats,echo=F,message=F,warning=F}
+df = filter(mydata,tissue %in% tissue_list2) %>%
+  select(mouse,tissue,transmission,shannon_sum,tissue_transmission)
+
+
+#summarize
+s = Summarize(shannon_sum~tissue_transmission,data=df,digits=3)
+write.csv(s,"../../Diversity/FullLength/SummaryStats.Diversity.Full.csv",
+          row.names=F)
+
+#kruskal wallis test
+pval=kruskal.test(shannon_sum~tissue_transmission,data=df)
+print(pval$p.value)
+#pval 0.004
+#Null: all samples/groups are from identical populations
+#Alt: At least one of the samples comes from different population
+#there exists a significant difference among the groups p = 0.004207
+
+#Dunns test
+#If the Kruskal–Wallis test is significant, a post-hoc analysis can be performed to #determine which groups differ from each other group. 
+DT = dunnTest(shannon_sum~tissue_transmission,data=df,method = 'bh')
+d = as.data.frame(DT$res)
+write.csv(d,"../../Diversity/FullLength/DunnTest.Stats.Diversity.FULL.csv",row.names = F)
+```
+
+Boxplots of Shannon Entropy broken up by transmission route.     
+     
+Uses only samples that have the full genome.     
+
+```{r, echo=F,message=F}
+b<- ggplot(mydata, aes(x = transmission, y = shannon_sum,group=transmission))+
+    geom_boxplot(width=0.5) +
+    geom_jitter(aes(shape=experiment),width = 0.15,alpha=0.9)+
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+    theme_bw()
+ggsave(b, file=("../../Diversity/FullLength/Zika.Transmission.FULL.pdf"), width=6, height=4,limitsize=FALSE)
+print(b) 
+```
+
+### Kruskal Wallis statistics on full-length samples grouped by transmission route.     
+      
+Not significant.     
+       
+P-value:    
+       
+```{r StatsTransmissionFULL,echo=F,message=F,warning=F}
+transstat = filter(mydata,tissue %in% tissue_list2) %>%
+  select(mouse,tissue,transmission,shannon_sum)
+
+
+#summarize
+s = Summarize(shannon_sum~transmission,data=transstat,digits=3)
+write.csv(s,
+          "../../Diversity/FullLength/SummaryStats.Diversity.ByTransmission.FULL.csv",
+          row.names=F)
+
+#kruskal wallis test
+pval=kruskal.test(shannon_sum~transmission,data=transstat)
+print(pval$p.value)
+#pval 0.1577169
+#Null: all samples/groups are from identical populations
+#Alt: At least one of the samples comes from different population
+#there does not exist a significant difference among the groups p.value 0.1577169
+
+#Dunns test
+#If the Kruskal–Wallis test is significant, a post-hoc analysis can be performed to #determine which groups differ from each other group. 
+DT = dunnTest(shannon_sum~transmission,data=transstat,method = 'bh')
+d = as.data.frame(DT$res)
+write.csv(d,"../../Diversity/FullLength/DunnTest.Stats.Diversity.ByTransmission.FULL.csv",row.names = F)
+```
+
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,204 @@
+---
+title: "ZikaDistance"
+author: "Kate Johnson"
+date: " `r Sys.Date()` "
+output: html_document
+---
+
+```{r, echo=F}
+library('ggplot2')
+library('tidyverse')
+library('reshape2')
+library('grid')
+require('gridExtra')
+require('plyr')
+library('plotly')
+library('broom')
+library('FSA')
+source("https://gist.githubusercontent.com/benmarwick/2a1bb0133ff568cbe28d/raw/fb53bd97121f7f9ce947837ef1a4c65a73bffb3f/geom_flat_violin.R")
+```
+
+```{r,echo=F}
+STRAIN = 'ZIKA'
+#GenomeLength = 10260 #full genome
+GenomeLength = 3882 #pcr1 
+```
+
+```{r,echo=F}
+metadat = '../../MetadataZika/Zika_Metadata_v4.csv'
+files <- c("../../Distance/PCR1/MR766.ntfreq.euc.ZIKA.50.3.pcr1.csv") #set directory first where files are located
+mdf = read.csv(file=metadat,header=T,sep=",",na.strings = c(''))
+mdf$ID = paste0(mdf$id)
+```
+  
+```{r Tissues,echo=F}
+tissue_list=c('stock','brain','liver','kidney','spinal_cord','bone_marrow')
+
+tissue_list2 = c('brain','liver','kidney','spinal_cord','bone_marrow',
+                 'stock2','mosquito','spleen',
+                 'stock1','blood','reproductive')
+
+myColors<-c('black','#a9a9a9','#004d99','#d80000','#ee7600','#ffcc00')
+names(myColors) =c('brain','liver','kidney','spinal_cord','bone_marrow','stock')
+colScale <- scale_color_manual(name = "grp",values = myColors)
+reducedColors =c('#66c2a4','#fc8d62','#8d9fcb','#e78ac3',
+                 '#a6d854','#ffd92f','#e5c494','#b2b3b2',
+                 '#feffb3','#0a068b','#fe3636')
+names(reducedColors) = c('brain','liver','kidney','spinal_cord','bone_marrow',
+                         'stock2','mosquito','spleen','stock1','blood','reproductive')
+RedColScale=scale_color_manual(name='grp',values=reducedColors)
+RedColFill = scale_fill_manual(name='grp',values=reducedColors)
+
+MouseOrder = c('stock1','stock2','plasmid','M1','M3','M2','M4',
+               'M5','M6','M7','M8','M9','M10',
+               'MQ1','MQ4','MQ6','MQ9','MQ14','MQ16','MQ18','MQ19',
+               'MQ23','MQ25','MQ1_2','MQ4_2')
+```
+
+```{r,echo=F}
+for (filename in files) {
+  dist_orig <- matrix(data = 0, nrow = 87 , ncol = 87) #must have data = 0
+  mydata<-read.csv(file=filename,header=T,sep=",",na.strings = c(''), row.names = NULL)
+
+  mydata_filt = select(mydata,sample,ntpos,A,C,G,T) %>% 
+    droplevels()
+  set2 = unique(factor(mydata_filt$sample))
+  samples <- unique(sort(mydata_filt$sample))
+  variant_positions <- c(unique(mydata_filt$ntpos))
+
+  for (nt in variant_positions) {
+    d1 <- (data=subset(mydata_filt, ntpos == nt, c("sample","A","C","G","T")))
+    d1 = d1[!duplicated(d1),] %>% droplevels()
+    
+    set1 = unique(factor(d1$sample)) #check to make sure everything is the same size throughout
+    setdf = setdiff(set2,set1) #if it isn't the same print what is different between the files
+
+    #to make first column with samples names the row names
+    rownames(d1)<-d1$sample 
+    d1[,1] <- NULL
+    d1 = d1[order(row.names(d1)),]
+    
+    #calculate distance
+    #can change method- several distance calculations, try 'manhattan'/L1
+    D_euc <- dist(d1, method='euclidean')
+    D_euc <- as.matrix(D_euc) #change dist type to matrix
+    #print(dim(D_euc)) #should be the same dimensions as the matrix you made above
+    dist_orig <- dist_orig + D_euc #add to the overall matrix 
+    #print(dim(dist_orig)) #should also be the same dimensions as matrix made above
+  }
+  mds <- cmdscale(dist_orig, k = 2, eig=TRUE) #mds of individual segment looked at
+  MDS1 <- mds$points[,1] #grab the mds columns from file
+  MDS2 <- mds$points[,2]
+  df3 <- data.frame(MDS1,MDS2) #append them together
+  df3$name = rownames(df3) #FOR FLUB ONLY!!!
+  total_df = merge(df3,mdf,by = 'name') 
+
+  p1 <-ggplot(data=filter(total_df, tissue %in% tissue_list2), aes(MDS1,MDS2)) +
+    geom_point(data=filter(total_df,experiment=='exp2'& tissue %in% tissue_list2),
+               color='black',size=4) +
+    geom_point(data=filter(total_df,experiment=='exp2' &tissue %in% tissue_list2),
+               aes(color=tissue),size=2.5) +
+    geom_point(data=filter(total_df,experiment=='exp1' & tissue %in% tissue_list2),
+               aes(color=tissue),size=2.5,alpha=0.75) +
+    theme_bw()+
+    RedColScale+
+    ggtitle(filename)
+  print(p1)
+  #ggsave(p1, file=paste0(filename, ".EucDist.Tissue.pdf"), width=8, height =5,useDingbats=FALSE)
+}
+```
+
+```{r,echo=F}
+####Distance From Stock Only #####
+dist.df = as.data.frame(dist_orig)
+
+dist_stock1 = select(dist.df,viral_stock_control) %>%
+  droplevels()
+dist_stock2 = select(dist.df,blood_meal_control) %>%
+  droplevels()
+
+dist_stock1$name = row.names(dist_stock1)
+dist_stock2$name = row.names(dist_stock2)
+
+keep =c('stock2','M2')
+
+dist_stock1=merge(dist_stock1,mdf,by='name') %>% 
+  select(viral_stock_control,mouse_id,transmission,tissue,sex,experiment) %>%
+  filter(!mouse_id %in% keep)
+colnames(dist_stock1) =c('stock','mouse_id','transmission','tissue','sex','experiment')
+
+dist_stock2=merge(dist_stock2,mdf,by='name') %>% 
+  select(blood_meal_control,mouse_id,transmission,tissue,sex,experiment) %>%
+  droplevels()
+
+dist_stock2 = filter(dist_stock2,mouse_id %in% keep ) %>%
+  droplevels()
+colnames(dist_stock2) =c('stock','mouse_id','transmission','tissue','sex','experiment')
+
+dist_stock = rbind(dist_stock1,dist_stock2)
+
+append.stock = select(dist_stock1,mouse_id,transmission,sex,experiment)
+append.stock = append.stock[!duplicated(append.stock),] %>% droplevels()
+append.stock$tissue = 'stock1'
+append.stock$stock = 0 
+
+append.stock2 = select(dist_stock2,mouse_id,transmission,sex,experiment)
+append.stock2 = append.stock2[!duplicated(append.stock2),] %>% droplevels()
+append.stock2$tissue = 'stock2'
+append.stock2$stock = 0 
+
+dist_x = rbind(append.stock,append.stock2) %>%
+  select(stock,mouse_id,transmission,tissue,sex,experiment)
+dist_stock2 = rbind(dist_x,dist_stock)
+```
+
+```{r,echo=F}
+ord = c('stock1','stock2','mosquito','brain','spinal_cord',
+        'kidney','liver','spleen','bone_marrow','blood','reproductive')
+
+dist_stock2$tissue = factor(dist_stock2$tissue,levels=rev(ord))
+dist_stock2$mouse_id = factor(dist_stock2$mouse_id,levels=rev(MouseOrder))
+
+p4 = ggplot(data=filter(dist_stock2, tissue %in% tissue_list2),
+            aes(x=mouse_id,y=stock,group=mouse_id,color=tissue)) +
+  geom_line(color='black') +
+  geom_point(aes(color=tissue,shape=experiment),alpha=0.8,size=3) +
+  theme_bw() +
+  RedColScale +
+  coord_flip() +
+  facet_grid(transmission~.,space='free',scales='free')
+print(p4)
+#ggsave(p4, file=paste0(STRAIN, ".Dist.FromStock.Mouse.pdf"), width=8, height =8,useDingbats=FALSE)
+
+p5= ggplot(data=filter(dist_stock, tissue %in% tissue_list2),
+           aes(x=tissue,y=stock,group=tissue)) +
+  geom_boxplot()+
+  geom_jitter(aes(color=tissue,shape=experiment),alpha=0.9,size=3,width=0.2) +
+  theme_bw() +
+  RedColScale +
+  coord_flip() +
+  ggtitle('DistanceFromStock')
+print(p5)
+#ggsave(p5, file=paste0(STRAIN, ".Dist.FromStock.Tissue.Box.pdf"), width=8, height =8,useDingbats=FALSE)
+```
+
+```{r Stats,echo=F}
+#summarize
+s = Summarize(stock~tissue,data=dist_stock1,digits=3)
+#write.csv(s,"../../Distance/PCR1/SummaryStats.Dist.Tiss.pcr1.exp1.csv",
+          #row.names=F)
+
+#kruskal wallis test
+pval=kruskal.test(stock~tissue,data=dist_stock1)
+pval
+#pval  p-value = 1.605e-05
+#Null: all samples/groups are from identical populations
+#Alt: At least one of the samples comes from different population
+#there exists a significant difference among the groups p = 0.004207
+
+#Dunns test
+#If the Kruskal–Wallis test is significant, a post-hoc analysis can be performed to #determine which groups differ from each other group. 
+DT = dunnTest(stock~tissue,data=dist_stock1,method = 'bh')
+d = as.data.frame(DT$res)
+#write.csv(d,"../../Distance/PCR1/DunnTest.Stats.Distance.PCR1.exp1.csv",row.names = F)
+```

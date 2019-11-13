@@ -1,0 +1,648 @@
+---
+title: "CompareClusterSharedDVG"
+author: "Kate Johnson"
+date: "April 27, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Load necessary packages    
+```{r LoadPackages, echo=F}
+library('ggplot2')
+library('tidyverse')
+library('reshape2')
+library('grid')
+require('gridExtra')
+require('plyr')
+library('factoextra')
+library('NbClust')
+library('cluster')
+library('plotly')
+library('FSA')
+library('rcompanion')
+```
+
+# Load the necessary data including metadata and DVG data with coverage and totalreads appended    
+```{r LoadFiles, echo=FALSE}
+STRAIN='ZIKA'
+segment_list=c('MR766')
+META = '../../MetadataZika/Zika_Metadata_v4.csv'
+metadata = read.csv(file=META,header=T,sep=",",na.strings = c('nan'))
+
+SegSize = '../../MetadataZika/SegmentSize.csv'
+SizeDF = read.csv(file=SegSize,header=T,sep=",",na.strings = c('nan')) #read
+```
+
+# Open, read, and reduce down the DVG information for clustering      
+# Clustered data frame is loaded down below (if this isn't the first time running)       
+```{r FilterData,echo=F}
+filename1=paste0('../../DVG_PCR/',STRAIN,'.CandidateDI_CDS_3.csv') #PCR
+mydata1=read.csv(file=filename1,header=T,sep=",",na.strings = c(''))
+mydata1 = mydata1[!duplicated(mydata1),] %>% droplevels()
+
+df1 = select(mydata1,gap,segment,gap_start,gap_end,gap_size,
+              estimated_length,segment_size,ORF_flag,positions_avg,
+              totalreads,gap_total,freq,mouse_id,transmission,tissue,
+              sex,type,id,id2,full,pcr,experiment)
+df1$name = df1$id
+df1 = df1[!duplicated(df1),] %>% droplevels()
+```
+
+# Cluster samples and cut tree to group by start and end locations of deletion using Euclidean distance         
+```{r Cluster,echo=F}
+Cluster_DF = data.frame(gap=as.character(),cluster=as.numeric(),name=as.character(),
+                        gap_start = as.numeric(),
+                        gap_end=as.numeric(),freq=as.numeric(),
+                        GapStart=as.numeric(), GapEnd = as.numeric(),
+                        NewGap = as.character(),segment=as.character())
+for(seg in segment_list){
+  print(seg) #loop through segments
+  seg_df = select(df1,name,pcr,segment,gap,gap_start,gap_end,freq) %>%
+    filter(segment==seg) %>% 
+    droplevels() #filter by segment and reduce down
+  
+  name_filt = seg_df[!duplicated(seg_df),] %>% droplevels() #remove any duplicates
+  clust_mat = select(name_filt,gap,gap_start,gap_end)
+  clust_mat = clust_mat[!duplicated(clust_mat),] %>% droplevels()
+  rownames(clust_mat) = clust_mat$gap #make the sample names the rownames to make matrix
+    
+    if(nrow(clust_mat) > 2){ #if there is enough to cluster
+    clusters = hclust(dist(clust_mat[,2:3],method='euclidean'),method='ward.D') #cluster
+    CutClusters= cutree(clusters,h=10) #cut the tree at a height of 10
+    ClustGroups = melt(CutClusters) #turn back into dataframe
+    ClustGroups$gap = rownames(ClustGroups)
+    colnames(ClustGroups) = c('cluster','gap') #add the cluster group
+    Cluster_Freq = merge(ClustGroups, name_filt[,c('name','gap','gap_start',
+                                                 'gap_end','freq')],by='gap')
+    
+    Cluster_ID = unique(Cluster_Freq$cluster)
+    
+    for (clust in Cluster_ID){
+      df_clust = filter(Cluster_Freq,cluster==clust)
+      df_clust = droplevels(df_clust)
+      max_gap = which.max(df_clust$freq) #find the gap that occurs most often
+      df_clust$GapStart = df_clust[max_gap,4] #grab start
+      df_clust$GapEnd = df_clust[max_gap,5] #grab end
+      df_clust$NewGap = df_clust[max_gap,1] #grab gap name
+      df_clust$segment = seg
+      Cluster_DF = rbind(Cluster_DF,df_clust)}
+    }else{print('not enough to cluster')
+      if (nrow(clust_mat) != 0) {
+      #clust_mat = select(name_filt,gap,gap_start,gap_end)
+      clust_mat$GapStart = clust_mat$gap_start
+      clust_mat$GapEnd = clust_mat$gap_end
+      clust_mat$NewGap = clust_mat$gap
+      clust_mat$segment = seg
+      Cluster_DF = rbind(Cluster_DF,df_clust)
+    } else(print('Something is off and should be checked manually'))
+  }
+}
+```
+
+# Merge together data for clusters
+```{r MergeClusters, echo=F}
+clust_d = select(Cluster_DF,gap,cluster,gap_start,gap_end,
+                 GapStart,GapEnd,NewGap,segment)
+clust_d = clust_d[!duplicated(clust_d),] %>% droplevels()
+
+full_df = merge(df1,clust_d[,c('gap','cluster','gap_start',
+                               'gap_end','GapStart','GapEnd',
+                                'NewGap','segment')],by=c('gap','segment'))
+full_df = full_df[!duplicated(full_df),] %>% droplevels()
+write.csv(full_df,paste0('../../DVG_PCR/',STRAIN,'.Full.Phased_Gaps.PCR.csv'),
+          row.names=F)
+ReducedDF = select(full_df,name,pcr,segment,cluster,GapStart,GapEnd,NewGap,totalreads,
+                   freq,gap_total,segment_size,transmission,tissue,
+                   sex,type,id,full,freq,mouse_id,experiment) %>% droplevels()
+ReducedDF = ReducedDF[!duplicated(ReducedDF),] %>% droplevels()
+```
+
+#sum aggregate by name,segment,cluster,NewGap, sum freq
+```{r SumFreqs,echo=F}
+dfx = aggregate(ReducedDF$freq ~ ReducedDF$name + ReducedDF$segment + ReducedDF$cluster + ReducedDF$NewGap,
+                FUN=sum)
+
+colnames(dfx) = c("name","segment","cluster","NewGap","freq")
+LargeDF = select(full_df,name,pcr,segment,cluster,GapStart,GapEnd,NewGap, 
+                   gap_total,totalreads,transmission,tissue,
+                   sex,type,id,full,mouse_id,experiment) %>% droplevels()
+DF_final = merge(dfx,LargeDF)
+```
+
+# Add information such as relative abundance, gap size, and dvg size and write file
+```{r AddAbundance,echo=F}
+DF_final$RelativeAbundance = DF_final$freq/DF_final$totalreads
+DF_final$TotGapAbun = (DF_final$gap_total/DF_final$totalreads) #*100
+DF_final = DF_final[!duplicated(DF_final),] %>% droplevels()
+DF_final$segment = factor(DF_final$segment,levels=segment_list)
+DF_final$GapSize = DF_final$GapEnd - DF_final$GapStart
+DF_final = merge(DF_final,SizeDF,by.y='segment',by.x='pcr')
+DF_final$DVG_size = DF_final$SegmentSize - DF_final$GapSize
+write.csv(DF_final, paste0('../../DVG_PCR/',STRAIN, '.Phased.DVGs.PCR.csv'),
+          row.names=F)
+```
+
+## Jump here to load data and make figures if you have already clustered
+```{r LoadDataIn,echo=F}
+DF_final = read.csv(file=paste0('../../DVG_PCR/',STRAIN,
+                                '.Phased.DVGs.PCR.csv'),header=T,sep=",",
+                    na.strings = c('nan'))
+```
+
+# Adding gene ids, subtracting 106, because fastq files were aligned only to CDS of zika
+```{r geneid,echo=F}
+Gene_ID = c('C','pr','M','E','NS1','NS2A','NS2B','NS3','NS4A','2K','NS4B','NS5')
+Gene_start = c(107,473,752,977,2477,3533,4211,4601,6452,6833,6902,7655)
+Gene_End = c(472,751,976,2476,3532,4210,4600,6451,6832,6901,7654,10363) #ns3 ns4a off by 100 missing
+Gene_df = cbind(Gene_ID,Gene_start,Gene_End)
+Gene_df = as.data.frame(Gene_df)
+Gene_df$Gene_start = (as.numeric(as.character(Gene_df$Gene_start)))-106
+Gene_df$Gene_End = as.numeric(as.character(Gene_df$Gene_End))-106
+Gene_df$Gene_ID = factor(Gene_df$Gene_ID,levels=Gene_ID)
+```
+
+# Comparing the two technical replicates of the blood meal controls    
+```{r BC,echo=F}
+BC1= filter(DF_final,mouse_id=='BC1')
+BC2 = filter(DF_final,mouse_id=='BC2')
+BC = merge(BC1,BC2,by=c('pcr','segment','cluster','NewGap','GapStart',
+                        'GapEnd','transmission','type','full',
+                        'experiment','GapSize','SegmentSize','STRAIN',
+                        'DVG_size','sex'))
+BC$name = 'stock2'
+BC$tissue = 'stock2'
+BC$freq =rowMeans(subset(BC,select=c('freq.x','freq.y')))
+BC$gap_total = rowMeans(subset(BC,select=c('gap_total.x','gap_total.y')))
+BC$totalreads = rowMeans(subset(BC,select=c('totalreads.x','totalreads.y')))
+BC$id = 'stock2'
+BC$mouse_id='stock2'
+BC$RelativeAbundance = rowMeans(subset(BC,select=c('RelativeAbundance.x',
+                                                   'RelativeAbundance.y')))
+BC$TotGapAbun = rowMeans(subset(BC,select=c('TotGapAbun.x',
+                                                   'TotGapAbun.y')))
+
+
+BC=select(BC,pcr,segment,cluster,NewGap,GapStart,GapEnd,transmission,tissue,type,
+          full,experiment,GapSize,SegmentSize,STRAIN,DVG_size,sex,name,
+          freq,gap_total,totalreads,id,mouse_id,RelativeAbundance,TotGapAbun) %>%
+  droplevels()
+
+bc_list =c('BC1','BC2')
+DF_final = filter(DF_final,!mouse_id %in% bc_list) %>%
+  select(pcr,segment,cluster,NewGap,GapStart,GapEnd,transmission,tissue,type,
+          full,experiment,GapSize,SegmentSize,STRAIN,DVG_size,sex,name,
+          freq,gap_total,totalreads,id,mouse_id,RelativeAbundance,TotGapAbun) %>%
+  droplevels()
+DF_final = rbind(DF_final,BC)
+```
+
+# Tissues that were are interested in and the colors that they are associated with in the figures
+```{r tissueColors, echo=FALSE}
+tissue_list2 = c('brain','liver','kidney','spinal_cord','bone_marrow',
+                 'stock2','mosquito','spleen',
+                 'stock1','blood','reproductive')
+reducedColors =c('#66c2a4','#fc8d62','#8d9fcb','#e78ac3',
+                 '#a6d854','#ffd92f','#e5c494','#b2b3b2',
+                 '#feffb3','#0a068b','#fe3636')
+names(reducedColors) =tissue_list2
+RedColScale=scale_color_manual(name='grp',values=reducedColors)
+RedColFill = scale_fill_manual(name='grp',values=reducedColors)
+
+#filtering for just the samples that were in the tissues collected
+df.filt = filter(DF_final, tissue %in% tissue_list2) %>% droplevels()
+```
+
+
+# Calculating RPKM values and generating figures     
+```{R log10RPKM,echo=F}
+#ordering the tissues 
+tissue_ord = c('plasmid','stock1','stock2','mosquito','brain','spinal_cord',
+        'kidney','liver','spleen','bone_marrow','blood','reproductive')
+
+#ordering the transmission routes
+transord = c('stock1','meal_control','blood_meal','mosquito','needle')
+
+orderlist = c('stock1-1','stock1-2','stock1-3',
+              'stock2-1','stock2-2','stock2-3',
+              'mosquito-1','mosquito-2','mosquito-3',
+              'brain-1','brain-2','brain-3',
+              'spinal_cord-1','spinal_cord-2','spinal_cord-3',
+              'kidney-1','kidney-2','kidney-3',
+              'liver-1','liver-2','liver-3',
+              'spleen-1','spleen-2','spleen-3',
+              'bone_marrow-1','bone_marrow-2','bone_marrow-3',
+              'blood-1','blood-2','blood-3',
+              'reproductive-1','reproductive-2','reproductive-3')
+
+#filtering data for only information that is needed to calculate rpkm, removing any duplicate rows
+RPM_FILT = select(df.filt,name,pcr,segment,tissue,SegmentSize,gap_total,totalreads,experiment,transmission)
+RPM_FILT = RPM_FILT[!duplicated(RPM_FILT), ] %>% droplevels()
+
+#calculating rpkm for each pcr (which in this case is considered 'segment size')
+RPM_FILT$RPKM = log10(RPM_FILT$gap_total/((RPM_FILT$SegmentSize/1000)*(RPM_FILT$totalreads/1000000)))
+
+#reorder samples for figures
+RPM_FILT$tissue = factor(RPM_FILT$tissue,levels=tissue_ord)
+RPM_FILT$PcrGroup = paste0(RPM_FILT$tissue, '-',RPM_FILT$pcr)
+RPM_FILT$transmission =factor(RPM_FILT$transmission,levels=transord)
+RPM_FILT$PcrGroup = factor(RPM_FILT$PcrGroup,levels=orderlist)
+
+
+#log10 RPKM figures of gap-spanning reads
+rpkm.tissue = ggplot(RPM_FILT,aes(x=tissue,y=RPKM,group=tissue)) +
+  geom_boxplot() +
+  geom_jitter(aes(color=tissue,shape=experiment),width=0.2) +
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = -90)) +
+  RedColScale 
+print(rpkm.tissue)
+ggsave(rpkm.tissue, file=paste0("../../DVG_PCR/",STRAIN,".rpkm.tissue.pdf"), 
+         width=10, height=4.5,limitsize=FALSE, useDingbats=FALSE)
+
+rpkm.tissue.pcr = ggplot(RPM_FILT,aes(x=PcrGroup,y=RPKM,group=PcrGroup)) +
+  geom_boxplot() +
+  geom_jitter(aes(color=tissue,shape=experiment),width=0.2) +
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = -90)) +
+  facet_grid(.~transmission,space='free',scales='free') +
+  RedColScale
+print(rpkm.tissue.pcr)
+ggsave(rpkm.tissue.pcr, 
+       file=paste0("../../DVG_PCR/",STRAIN,".rpkm.pcr.tissue.pdf"),
+       width=10, height=4.5,limitsize=FALSE, useDingbats=FALSE)
+
+rpkm.tissue.pcr = ggplot(RPM_FILT,aes(x=PcrGroup,y=RPKM,group=PcrGroup)) +
+  geom_boxplot() +
+  geom_jitter(aes(color=tissue,shape=experiment),width=0.2) +
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = -90)) +
+  #facet_grid(.~transmission,space='free',scales='free') +
+  RedColScale
+print(rpkm.tissue.pcr)
+ggsave(rpkm.tissue.pcr, 
+       file=paste0("../../DVG_PCR/",STRAIN,".rpkm.pcr.tissue.pcr.stats.pdf"),
+       width=10, height=4.5,limitsize=FALSE, useDingbats=FALSE)
+
+
+  rpkm_total = ggplot(RPM_FILT,aes(x=PcrGroup,y=totalreads,group=PcrGroup)) +
+  geom_boxplot() +
+  geom_jitter(aes(shape=experiment)) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = -90)) 
+print(rpkm_total)
+ggsave(rpkm_total, file=paste0("../../DVG_PCR/",STRAIN,".total.reads.tissue.pdf"), 
+         width=10, height=4.5,limitsize=FALSE, useDingbats=FALSE)
+```
+
+# Stats based off of pcr and tissue     
+# First used the Kruskal-Wallis test to determine whether samples were collected from 'identical' populations      
+# P-value: 6.094377e-14
+# Dunns tests were then performed to determine if there existed any pairwise differences         
+```{r PcrTissStat,echo=F}
+transstat = filter(RPM_FILT,tissue %in% tissue_list2) %>%
+  select(name,tissue,transmission,pcr,RPKM,PcrGroup)
+
+#Sumamrize the data
+s = Summarize(RPKM~PcrGroup,data=transstat,digits=3)
+
+write.csv(s,
+          "../../DVG_PCR/SummaryStats.DVG.RPKM.ByTissuePcr.csv",
+          row.names=F)
+
+#kruskal wallis test
+pval=kruskal.test(RPKM~PcrGroup,data=transstat)
+print(pval$p.value)
+#pval  6.094377e-14
+#Null: all samples/groups are from identical populations
+#Alt: At least one of the samples comes from different population
+#there exists a significant difference among the groups p.value  6.094377e-14
+
+#Dunns test
+#If the Kruskal–Wallis test is significant, a post-hoc analysis can be performed to #determine which groups differ from each other group. 
+DT = dunnTest(RPKM~PcrGroup,data=transstat,method = 'bh')
+d = as.data.frame(DT$res)
+write.csv(d,"../../DVG_PCR/DunnTest.Stats.DVG.RPKM.ByTissue.PCR.csv",row.names = F)
+```
+
+# Stats based off of tissue, pcr, transmission      
+# First performed a Kruskal-Wallis test      
+# P-value: 2.483553e-10       
+# A Dunns test was then performed to determine if any significant difference between groups       
+```{r TissPCRTransStat,echo=F}
+transstat = filter(RPM_FILT,tissue %in% tissue_list2) %>%
+  select(name,tissue,transmission,pcr,RPKM,PcrGroup)
+transstat$transgroup = paste0(transstat$transmission,'-',transstat$PcrGroup)
+
+#First- summarize data used for Kruskal-Wallis test
+s = Summarize(RPKM~transgroup,data=transstat,digits=3)
+
+write.csv(s,
+          "../../DVG_PCR/SummaryStats.DVG.RPKM.ByTissuePcrTrans.csv",
+          row.names=F)
+
+#kruskal wallis test
+pval=kruskal.test(RPKM~transgroup,data=transstat)
+print(pval$p.value)
+#pval 2.483553e-10
+#Null: all samples/groups are from identical populations
+#Alt: At least one of the samples comes from different population
+#there exists a significant difference among the groups p.value  2.483553e-10
+
+#Dunns test
+#If the Kruskal–Wallis test is significant, a post-hoc analysis can be performed to #determine which groups differ from each other group. 
+DT = dunnTest(RPKM~transgroup,data=transstat,method = 'bh')
+d = as.data.frame(DT$res)
+write.csv(d,"../../DVG_PCR/DunnTest.Stats.DVG.RPKM.ByTissue.PCR.trans.csv",row.names = F)
+```
+
+# Histogram showing the number of DVGs that have similar start sites normalized by all DVGs identified in the data across samples      
+```{r Histogram,echo=F}
+#just grap the start positions
+StartDF = select(df.filt,NewGap,GapStart)
+#remove any duplicates within samples-so will count multiple dvgs and samples that have same dvg
+StartDF = StartDF[!duplicated(StartDF),] %>% droplevels()
+EndDF = select(df.filt,NewGap,GapEnd)
+EndDF = EndDF[!duplicated(EndDF),] %>% droplevels()
+
+#this is normalized by all DVGs and samples 
+p6 = ggplot() +
+    geom_rect(data=Gene_df,aes(xmin=Gene_start,xmax=Gene_End,
+                             ymin=0,ymax=0.05),alpha=0.1,color='black') +
+    geom_histogram(data = StartDF,
+                   aes(x=GapStart,
+                       y=(..count..)/tapply(..count..,..PANEL..,sum)[..PANEL..]),
+                   binwidth=30,fill='#d6604d',alpha=0.9) +
+    geom_histogram(data = EndDF, 
+                   aes(x=GapEnd,
+                       y=(..count..)/tapply(..count..,..PANEL..,sum)[..PANEL..]),
+                   binwidth=30,fill='#4393c3',alpha=0.7) +
+    ggtitle("Normalized Counts") +
+    theme_bw()
+print(p6)
+ggsave(p6, file=paste0("../../DVG_PCR/",STRAIN,".Position.Histogram.NotAverage.pdf"),
+         width=8, height=5,
+         limitsize=FALSE, useDingbats=FALSE)
+
+```
+
+# Looking at shared DVGs that are present in at least 3 reads and across 3 samples 
+```{r CheckSharedDVGtype,echo=F}
+MouseOrder = c('stock1','stock2','plasmid','M1','M3','M2','M4',
+               'M5','M6','M7','M8','M9','M10',
+               'MQ1','MQ4','MQ6','MQ9','MQ14','MQ16','MQ18','MQ19',
+               'MQ23','MQ25','MQ1_2','MQ4_2')
+
+freqcutoff = 3
+count_cutoff = 3
+
+df.f = filter(df.filt,freq>=freqcutoff) %>%
+  select(name,NewGap,pcr,tissue,mouse_id) %>% 
+  droplevels()
+df.f = df.f[!duplicated(df.f),] %>% droplevels()
+Totalgaps = count(df.f, 'NewGap')
+colnames(Totalgaps) = c('NewGap','AllSamples')
+top.gap = filter(Totalgaps,AllSamples >=count_cutoff)
+top.gaps = levels(factor(top.gap$NewGap))
+
+#filter samples by the new gaps 
+gap.filt = filter(df.filt,df.filt$NewGap %in% top.gaps) %>%
+  select(pcr,name,NewGap,freq,transmission,tissue,mouse_id,GapStart,GapEnd) %>%
+  droplevels()
+gap.filt$mouse_id = factor(gap.filt$mouse_id,levels=rev(MouseOrder))
+gap.filt$tissue  = factor(gap.filt$tissue,levels=(tissue_ord))
+
+PlotTop = ggplot(gap.filt,aes(x=tissue,y=mouse_id,group=mouse_id)) +
+  geom_line() +
+  geom_point(aes(color=tissue),size=2.5) +
+  facet_wrap(.~NewGap,scales='free_x') +
+  theme_bw() + 
+  theme(axis.text.x = element_text(angle = -90)) +
+  RedColScale
+ggsave(PlotTop, file=paste0("../../DVG_PCR/",STRAIN,".Top.DVGs.tissue.pdf"), 
+         width=60, height=60,limitsize=FALSE, useDingbats=FALSE)
+```
+
+# Filter for DVGs that are also present in the stock   
+```{r InStock,echo=F}
+stock_d=filter(df.filt,name=='stock2' | name=='stock1') %>%
+  droplevels()
+stock_d = stock_d[!duplicated(stock_d),] %>% droplevels()
+stock = levels(stock_d$NewGap)
+dvg.filt = filter(gap.filt, NewGap %in% stock) %>%
+  droplevels() #filter for gaps that are shared with stock
+
+PlotTop2 = ggplot(dvg.filt,aes(x=tissue,y=mouse_id,group=mouse_id)) +
+  geom_line() +
+  geom_point(aes(color=tissue)) +
+  facet_wrap(.~NewGap)+#,scales='free_x') +
+  theme_bw() + 
+  theme(axis.text.x = element_text(angle = -90)) +
+  RedColScale
+ggsave(PlotTop2, file=paste0("../../DVG_PCR/",STRAIN,".Top.DVGs.AllStock.pdf"), 
+         width=35, height=30,limitsize=FALSE, useDingbats=FALSE)
+```
+
+# Curve plots showing DVGs that are shared across at least 3 samples, separated by tissue and pcr. With color
+```{r CurvePCR,echo=F}
+gaps = select(gap.filt,NewGap,GapStart,GapEnd,pcr,tissue,) %>%
+  droplevels() #using no.stock which are gaps that aren't shared with the stock
+gaps=gaps[!duplicated(gaps),]%>%droplevels()
+curvy = ggplot() +
+  geom_rect(data=Gene_df,aes(xmin=Gene_start,xmax=Gene_End,
+                             ymin=-1,ymax=0),alpha=0.05,color='black') +
+  geom_curve(data=gaps,aes(x=GapStart,y=0,xend = GapEnd,yend=0,color=tissue),alpha=0.7) +
+  scale_y_continuous(expand = c(0,0), limits=c(-1,0)) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle=90)) +
+  facet_grid(pcr~tissue) +
+  RedColScale
+print(curvy)
+ggsave(curvy, 
+       file=paste0('../../DVG_PCR/CurvePlots.',freqcutoff,'.',count_cutoff,'.PCR.Tissue.Color.pdf'),
+       width=30, height=6,limitsize=FALSE, useDingbats=FALSE)
+
+write.csv(gaps,"../../DVG_PCR/DVGs.Tissue.PCR.csv",row.names=F)
+```
+
+# Curve plots showing DVGs that are shared across at least 3 samples, separated by tissue and pcr. Black and white figures.
+```{r CurveBW,echo=F}
+gaps = select(gap.filt,NewGap,GapStart,GapEnd,pcr,tissue,) %>%
+  droplevels() #using no.stock which are gaps that aren't shared with the stock
+gaps=gaps[!duplicated(gaps),]%>%droplevels()
+curvy = ggplot() +
+  geom_rect(data=Gene_df,aes(xmin=Gene_start,xmax=Gene_End,
+                             ymin=-1,ymax=0),alpha=0.05,color='black') +
+  geom_curve(data=gaps,aes(x=GapStart,y=0,xend = GapEnd,yend=0),alpha=0.4) +
+  scale_y_continuous(expand = c(0,0), limits=c(-1,0)) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle=90)) +
+  facet_grid(pcr~tissue) 
+print(curvy)
+ggsave(curvy, 
+       file=paste0('../../DVG_PCR/CurvePlots.',freqcutoff,'.',count_cutoff,'.PCR.Tissue.NoColor.pdf'),
+       width=30, height=6,limitsize=FALSE, useDingbats=FALSE)
+```
+
+
+# Filter dataframe for samples with DVGs that aren't found in the stock
+```{r NoStock,echo=F}
+no.stock = filter(gap.filt, !NewGap %in% stock) %>%
+  droplevels() #filter for gaps that aren't shared with the stock
+
+PlotTop3 = ggplot(no.stock,aes(x=tissue,y=mouse_id,group=mouse_id)) +
+  geom_line() +
+  geom_point(aes(color=tissue),size=2.5) +
+  facet_wrap(.~NewGap)+ #,scales='free_x') +
+  theme_bw() + 
+  theme(axis.text.x = element_text(angle = -90)) +
+  RedColScale
+ggsave(PlotTop3, file=paste0("../../DVG_PCR/",STRAIN,".Top.DVGs.NoStock.pdf"), 
+         width=40, height=40,limitsize=FALSE, useDingbats=FALSE)
+```
+
+# arc plot with all DVGs
+```{r CurveAll,echo=F}
+gaps = select(df.filt,NewGap,GapStart,GapEnd) %>%
+  droplevels()
+gaps=gaps[!duplicated(gaps),]%>%droplevels()
+curvy = ggplot() +
+  geom_rect(data=Gene_df,aes(xmin=Gene_start,xmax=Gene_End,
+                             ymin=-1,ymax=0),alpha=0.05,color='black') +
+  geom_curve(data=gaps,aes(x=GapStart,y=0,xend = GapEnd,yend=0),alpha=0.02) +
+  scale_y_continuous(expand = c(0,0), limits=c(-1,0)) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle=90)) 
+print(curvy)
+ggsave(curvy, file=paste0('../../DVG_PCR/CurvePlots.AllDVGs.pdf'), width=10, height=5,limitsize=FALSE, useDingbats=FALSE)
+```
+
+# arc plots with top DVGs shared with stock 
+```{r CurveWstock,echo=F}
+gaps = select(dvg.filt,NewGap,GapStart,GapEnd) %>%
+  droplevels() #using dvg.filt which contain gaps that are shared with the stock
+gaps=gaps[!duplicated(gaps),]%>%droplevels()
+curvy = ggplot() +
+  geom_rect(data=Gene_df,aes(xmin=Gene_start,xmax=Gene_End,
+                             ymin=-1,ymax=0),alpha=0.05,color='black') +
+  geom_curve(data=gaps,aes(x=GapStart,y=0,xend = GapEnd,yend=0),alpha=0.2) +
+  scale_y_continuous(expand = c(0,0), limits=c(-1,0)) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle=90)) 
+print(curvy)
+ggsave(curvy, 
+       file=paste0('../../DVG_PCR/CurvePlots.',freqcutoff,'.',count_cutoff,'.WStock.pdf'),
+       width=10, height=5,limitsize=FALSE, useDingbats=FALSE)
+```
+
+# arc plots with top dvgs that aren't shared with the stock
+```{r CurveNoStock,echo=F}
+gaps = select(no.stock,NewGap,GapStart,GapEnd) %>%
+  droplevels() #using no.stock which are gaps that aren't shared with the stock
+gaps=gaps[!duplicated(gaps),]%>%droplevels()
+curvy = ggplot() +
+  geom_rect(data=Gene_df,aes(xmin=Gene_start,xmax=Gene_End,
+                             ymin=-1,ymax=0),alpha=0.05,color='black') +
+  geom_curve(data=gaps,aes(x=GapStart,y=0,xend = GapEnd,yend=0),alpha=0.2) +
+  scale_y_continuous(expand = c(0,0), limits=c(-1,0)) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle=90)) 
+print(curvy)
+ggsave(curvy, 
+       file=paste0('../../DVG_PCR/CurvePlots.',freqcutoff,'.',count_cutoff,'.NoStock.pdf'),
+       width=10, height=5,limitsize=FALSE, useDingbats=FALSE)
+```
+
+# Curve plots by PCR groups. No stock!
+```{r CurvePCRNoSTock,echo=F}
+gaps = select(no.stock,NewGap,GapStart,GapEnd,pcr) %>%
+  droplevels() #using no.stock which are gaps that aren't shared with the stock
+gaps=gaps[!duplicated(gaps),]%>%droplevels()
+curvy = ggplot() +
+  geom_rect(data=Gene_df,aes(xmin=Gene_start,xmax=Gene_End,
+                             ymin=-1,ymax=0),alpha=0.05,color='black') +
+  geom_curve(data=gaps,aes(x=GapStart,y=0,xend = GapEnd,yend=0),alpha=0.2) +
+  scale_y_continuous(expand = c(0,0), limits=c(-1,0)) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle=90)) +
+  facet_grid(pcr~.)
+print(curvy)
+ggsave(curvy, 
+       file=paste0('../../DVG_PCR/CurvePlots.',freqcutoff,'.',count_cutoff,'.NoStock.PCR.pdf'),
+       width=8, height=8,limitsize=FALSE, useDingbats=FALSE)
+
+```
+
+# curve plots  by PCR groups. With stock!
+```{r CurveWStockPCR,echo=F}
+gaps = select(dvg.filt,NewGap,GapStart,GapEnd,pcr) %>%
+  droplevels() #using dvg.filt which contain gaps that are shared with the stock
+gaps=gaps[!duplicated(gaps),]%>%droplevels()
+curvy = ggplot() +
+  geom_rect(data=Gene_df,aes(xmin=Gene_start,xmax=Gene_End,
+                             ymin=-1,ymax=0),alpha=0.05,color='black') +
+  geom_curve(data=gaps,aes(x=GapStart,y=0,xend = GapEnd,yend=0),alpha=0.2) +
+  scale_y_continuous(expand = c(0,0), limits=c(-1,0)) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle=90)) +
+  facet_grid(pcr~.)
+print(curvy)
+ggsave(curvy, 
+       file=paste0('../../DVG_PCR/CurvePlots.',freqcutoff,'.',count_cutoff,'.WStock.PCR.pdf'),
+       width=8, height=8,limitsize=FALSE, useDingbats=FALSE)
+```
+
+```{R CheckGene,echo=F}
+head(df.filt)
+df.dvg = select(df.filt,NewGap,GapStart,GapEnd) %>% 
+  droplevels() #select for only gap information
+df.dvg = df.dvg[!duplicated(df.dvg),] %>% 
+  droplevels() #remove duplicate gaps (gaps that are in multiple samples)
+
+count.start = count(df.dvg,'GapStart') #count the number of dvg species with same start
+count.start$type = 'start' 
+count.start
+colnames(count.start) = c('position','freq','type')
+count.end = count(df.dvg,'GapEnd') #count the number of dvg species with same end
+count.end$type = 'end'
+colnames(count.end) = c('position','freq','type')
+
+count.position = rbind(count.start,count.end)
+
+Genes = data.frame(gene = as.character(), position = as.numeric())
+for (id in Gene_ID){
+  print(id)
+  gene_Range = filter(Gene_df, Gene_ID == id) %>%
+    droplevels() #filter for gene id
+  print(gene_Range)
+  #repeat gene id to make df
+  gene_ids = c(rep(id, 
+                   (gene_Range$Gene_End + 1 - gene_Range$Gene_start)))
+  print(length(gene_ids))
+  ntpos = c(seq(gene_Range$Gene_start, gene_Range$Gene_End, by =1))
+  print(length(ntpos))
+  genes_df = cbind(gene_ids,ntpos)
+  genes_df = as.data.frame(genes_df)
+  Genes = rbind(Genes, genes_df)
+}
+count.df = merge(count.position,Genes,by.x='position',
+                 by.y='ntpos')
+count.types.genes = count(count.df,c("type","gene_ids"))
+count.types.genes
+count.types.genes = merge(count.types.genes,Gene_df,by.x="gene_ids",
+                          by.y='Gene_ID')
+
+count.types.genes$NormalizedCounts = count.types.genes$freq/((count.types.genes$Gene_End-count.types.genes$Gene_start + 1)/1000)
+
+plotcounts = ggplot(count.types.genes,aes(x=gene_ids,y=NormalizedCounts,
+                                          group=gene_ids,fill=type)) +
+  geom_col() +
+  theme_bw() +
+  scale_fill_brewer(palette = 'Paired')
+print(plotcounts)
+head(count.types.genes)
+ggsave(plotcounts, file=paste0("../../DVG_PCR/",STRAIN,".NormalizedGeneDVGcounts.pdf"), 
+         width=8, height=5,limitsize=FALSE, useDingbats=FALSE)
+```
