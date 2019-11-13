@@ -6,18 +6,16 @@ Scripts included:
 
 ### Alignment and variant calling:  
 
-`STAR.sh` uses the following scripts, to trim, align, and remove duplicate reads in the sequencing data, call minority variants, pull coverage information, and generate consensus fasta files from the alignments.
+`STAR.sh` uses the following four scripts, to trim, align, and remove duplicate reads in the sequencing data, call minority variants, pull coverage information, and generate consensus fasta files from the alignments.
 
-1.  `STAR_align_v3.rename.merge.py` (trims, aligns, deduplicates, merges 3 Zika amplicon alignments, and properly names files)    
-2.  `readreport_v4_2.py`  (calls minor variants for each alignment)   
-3.  `coverage_readreport.v2.py` (pulls coverage information from snplist files generated using the readreport_v4_2.py code)   
-4.  `ConsensusFasta.py`   (pulls consensus information from the snplist files generated using the readreport_v4_2.py code)      
+1.  `STAR_align_v3.rename.merge.py` trims, aligns, deduplicates, merges 3 Zika amplicon alignments, and properly names files    
+2.  `readreport_v4_2.py`  calls minor variants for each alignment   
+3.  `coverage_readreport.v2.py` pulls coverage information from snplist files generated using the readreport_v4_2.py code   
+4.  `ConsensusFasta.py`   pulls consensus information from the snplist files generated using the readreport_v4_2.py code      
   
-#### linegraphPrep_nonsynhack_8.py  
-Pulls all minor variants across snplist files (generated using readreport_v4_2.py) using preferred thresholds. 
+`linegraphPrep_nonsynhack_8.py`  Pulls all minor variants across snplist files (generated using readreport_v4_2.py) using preferred thresholds. 
 
-#### SNVAnalysis.Zika.All.Files.Rmd and coverage.v3.zika.R
-Generates figures using coverage and variant data
+`SNVAnalysis.Zika.All.Files.Rmd` and `coverage.v3.zika.R` generate figures using coverage and variant data
 
 ### Diversity and Genetic Distance: 
 #### Shannon_Entropy.zika.py Zika.Shannon.Diversity.v2.Rmd
