@@ -13,7 +13,7 @@ Scripts included:
   3.  `coverage_readreport.v2.py` pulls coverage information from snplist files generated using the `readreport_v4_2.py` code   
   4.  `ConsensusFasta.py`   pulls consensus information from the snplist files generated using the `readreport_v4_2.py` code      
   
-+ `linegraphPrep_nonsynhack_8.py`  : pulls all minor variants across snplist files (generated using `readreport_v4_2.py`) using preferred thresholds. 
++ `linegraphPrep_nonsynhack_8.py`  : pulls all minor variants across snplist files (generated using `readreport_v4_2.py`) with preferred thresholds. 
 
 + `SNVAnalysis.Zika.All.Files.Rmd` and `coverage.v3.zika.R` generate figures using coverage and variant data
 
@@ -29,8 +29,6 @@ Scripts included:
 
 # Reference:     
 In preparation
-
-
 
 # Contact:      
 Kate Johnson kej310@nyu.edu
